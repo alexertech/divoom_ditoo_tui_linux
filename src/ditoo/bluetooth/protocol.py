@@ -1,18 +1,17 @@
 """Divoom Ditoo-Plus binary protocol encoder/decoder.
 
-Frame format (on the wire, after byte stuffing):
+Frame format:
     [0x01] [length_lo] [length_hi] [payload...] [crc_lo] [crc_hi] [0x02]
 
 - Header: 0x01 (start marker)
-- Length: 16-bit LE, size of payload + 2 (CRC bytes). Computed BEFORE escaping.
+- Length: 16-bit LE, size of payload + 2 (CRC bytes)
 - Payload: command byte + parameters
-- CRC: 16-bit LE sum of (length_bytes + payload). Computed BEFORE escaping.
+- CRC: 16-bit LE sum of (length_bytes + payload)
 - Footer: 0x02 (end marker)
 
-Byte stuffing (applied AFTER CRC, to length+payload+CRC):
-    0x01 -> 0x03 0x04
-    0x02 -> 0x03 0x05
-    0x03 -> 0x03 0x06
+Note: The Ditoo-Plus does NOT use byte stuffing. Raw bytes are sent
+between header and footer markers. Confirmed via hass-divoom project
+and live device testing.
 """
 
 from ditoo.logging_setup import get_logger
@@ -52,33 +51,17 @@ class DitooProtocol:
     """Encodes commands into Divoom wire format."""
 
     @staticmethod
-    def _escape_bytes(data: bytes) -> bytes:
-        """Apply byte stuffing to avoid control characters in payload.
-
-        0x01 -> 0x03 0x04
-        0x02 -> 0x03 0x05
-        0x03 -> 0x03 0x06
-        """
-        result = bytearray()
-        for b in data:
-            if b == 0x01:
-                result.extend([0x03, 0x04])
-            elif b == 0x02:
-                result.extend([0x03, 0x05])
-            elif b == 0x03:
-                result.extend([0x03, 0x06])
-            else:
-                result.append(b)
-        return bytes(result)
-
-    @staticmethod
     def _calculate_crc(data: bytes) -> int:
         """Calculate CRC as simple 16-bit sum of all bytes."""
         return sum(data) & 0xFFFF
 
     @staticmethod
     def _build_frame(payload: bytes) -> bytes:
-        """Wrap payload in a complete Divoom frame with escaping.
+        """Wrap payload in a complete Divoom frame.
+
+        The Ditoo-Plus does NOT use byte stuffing (confirmed via
+        hass-divoom and live device testing). Raw bytes are sent
+        between the 0x01 header and 0x02 footer markers.
 
         Args:
             payload: Command byte(s) followed by parameters.
@@ -90,15 +73,12 @@ class DitooProtocol:
         length = len(payload) + 2
         length_bytes = length.to_bytes(2, "little")
 
-        # CRC covers length bytes + payload (before escaping)
+        # CRC covers length bytes + payload
         raw_inner = length_bytes + payload
         crc = DitooProtocol._calculate_crc(raw_inner)
         crc_bytes = crc.to_bytes(2, "little")
 
-        # Escape the inner content (length + payload + crc)
-        escaped = DitooProtocol._escape_bytes(raw_inner + crc_bytes)
-
-        frame = bytes([FRAME_HEADER]) + escaped + bytes([FRAME_FOOTER])
+        frame = bytes([FRAME_HEADER]) + raw_inner + crc_bytes + bytes([FRAME_FOOTER])
         logger.debug(f"Built frame: {frame.hex()}")
         return frame
 
@@ -154,7 +134,7 @@ class DitooProtocol:
     @staticmethod
     def set_clock(
         style: int = CLOCK_FULLSCREEN,
-        show_time: bool = True,
+        twentyfour: bool = True,
         show_weather: bool = True,
         show_temp: bool = True,
         show_calendar: bool = True,
@@ -164,9 +144,12 @@ class DitooProtocol:
     ) -> bytes:
         """Set clock display with style and options.
 
+        Ditoo-Plus payload format (from hass-divoom):
+            0x45 0x00 [24h_flag] [style] [activated] [weather] [temp] [calendar] R G B
+
         Args:
-            style: One of CLOCK_* constants.
-            show_time: Show time on clock face.
+            style: One of CLOCK_* constants (0-15).
+            twentyfour: Use 24-hour time format.
             show_weather: Show weather icon.
             show_temp: Show temperature.
             show_calendar: Show date/calendar.
@@ -174,9 +157,9 @@ class DitooProtocol:
         """
         payload = bytes([
             CMD_SET_CHANNEL, CHANNEL_CLOCK,
-            0x01,  # sub-command marker
+            0x01 if twentyfour else 0x00,  # 12h/24h time format
             style,
-            0x01 if show_time else 0x00,
+            0x01,  # clock activated
             0x01 if show_weather else 0x00,
             0x01 if show_temp else 0x00,
             0x01 if show_calendar else 0x00,

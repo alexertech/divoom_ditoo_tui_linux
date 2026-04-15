@@ -64,19 +64,17 @@ class WeatherController:
     def last_description(self) -> str:
         return self._last_description
 
-    def fetch_and_push(self) -> bool:
+    def fetch_and_push(self) -> tuple[bool, str]:
         """Fetch current weather from Open-Meteo and send to device.
 
         Returns:
-            True if weather was fetched and sent successfully.
+            Tuple of (success, detail_message).
         """
         if not self._config.enabled:
-            logger.info("Weather feature disabled in config")
-            return False
+            return False, "Weather disabled in config"
 
         if self._config.latitude == 0.0 and self._config.longitude == 0.0:
-            logger.warning("Weather coordinates not configured")
-            return False
+            return False, "Weather coordinates not configured"
 
         try:
             temp_unit = "fahrenheit" if self._config.unit == "fahrenheit" else "celsius"
@@ -102,15 +100,17 @@ class WeatherController:
 
             frame = DitooProtocol.set_weather(temperature, divoom_code)
             success = self._conn.send(frame)
-            if success:
-                logger.info(
-                    f"Weather pushed: {temperature}deg {self._last_description}"
-                )
-            return success
+            if not success:
+                return False, "Send failed"
+
+            logger.info(
+                f"Weather pushed: {temperature}deg {self._last_description}"
+            )
+            return True, f"{temperature}C {self._last_description}"
 
         except (httpx.HTTPError, KeyError, ValueError) as e:
             logger.error(f"Weather fetch failed: {e}")
-            return False
+            return False, f"Fetch error: {e}"
 
     @staticmethod
     def _weather_description(code: int) -> str:

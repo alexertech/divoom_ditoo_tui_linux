@@ -65,7 +65,7 @@ class DitooApp(App):
             port=config.device.rfcomm_port,
         )
         self._clock = ClockController(self._connection)
-        self._display = DisplayController(self._connection)
+        self._display_ctrl = DisplayController(self._connection)
         self._weather = WeatherController(self._connection, config.weather)
         self._status_bar: StatusBar | None = None
         self._log_bar: Static | None = None
@@ -136,31 +136,30 @@ class DitooApp(App):
 
     async def _sync_worker(self) -> None:
         """Run full sync in background thread."""
-        results = []
+        try:
+            results = []
 
-        # Sync clock
-        clock_ok = self._clock.sync_time()
-        if clock_ok:
-            from datetime import datetime
-            now = datetime.now().strftime("%H:%M:%S")
-            results.append(f"Clock {now}")
-        else:
-            results.append("Clock FAIL")
+            # Sync clock
+            clock_ok = self._clock.sync_time()
+            if clock_ok:
+                from datetime import datetime
+                now = datetime.now().strftime("%H:%M:%S")
+                results.append(f"Clock {now}")
+            else:
+                results.append("Clock FAIL")
 
-        # Sync weather and configure clock face to display it
-        weather_ok = self._weather.fetch_and_push()
-        if weather_ok:
-            frame = DitooProtocol.set_clock(show_weather=True, show_temp=True)
-            self._connection.send(frame)
-            temp = self._weather.last_temperature
-            desc = self._weather.last_description
-            results.append(f"Weather {temp}C {desc}")
-        else:
-            results.append("Weather FAIL")
+            # Sync weather
+            weather_ok, weather_detail = self._weather.fetch_and_push()
+            if weather_ok:
+                results.append(f"Weather {weather_detail}")
+            else:
+                results.append(f"Weather: {weather_detail}")
 
-        summary = "Synced: " + " | ".join(results)
-        self.call_from_thread(self._log, summary)
-        self.call_from_thread(self._update_status)
+            summary = "Synced: " + " | ".join(results)
+            self.call_from_thread(self._log, summary)
+            self.call_from_thread(self._update_status)
+        except Exception as e:
+            self.call_from_thread(self._log, f"Sync error: {e}")
 
     def action_brightness(self) -> None:
         """Open brightness adjustment modal."""
@@ -175,12 +174,12 @@ class DitooApp(App):
                 )
 
         self.push_screen(
-            BrightnessScreen(self._display.brightness), on_brightness_result
+            BrightnessScreen(self._display_ctrl.brightness), on_brightness_result
         )
 
     def _apply_brightness(self, level: int) -> None:
         """Send brightness to device in worker thread."""
-        success = self._display.set_brightness(level)
+        success = self._display_ctrl.set_brightness(level)
         if success:
             self.call_from_thread(self._log, f"Brightness set to {level}%")
         else:
@@ -203,12 +202,17 @@ class DitooApp(App):
 
     def _apply_clock_face(self, style: int, name: str) -> None:
         """Send clock face style to device in worker thread."""
-        frame = DitooProtocol.set_clock(style=style)
-        success = self._connection.send(frame)
-        if success:
-            self.call_from_thread(self._log, f"Clock face: {name}")
-        else:
-            self.call_from_thread(self._log, "Clock face change failed.")
+        try:
+            frame = DitooProtocol.set_clock(style=style)
+            success = self._connection.send(frame)
+            if success:
+                self.call_from_thread(
+                    self._log, f"Clock face: {name} ({len(frame)}b sent)"
+                )
+            else:
+                self.call_from_thread(self._log, "Clock face: send failed")
+        except Exception as e:
+            self.call_from_thread(self._log, f"Clock face error: {e}")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """Handle menu item selection via Enter key."""
