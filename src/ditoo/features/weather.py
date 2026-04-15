@@ -11,36 +11,45 @@ from ditoo.logging_setup import get_logger
 
 logger = get_logger(__name__)
 
-# Map WMO weather codes to Divoom weather types
-# WMO: https://open-meteo.com/en/docs (weathercode section)
-# Divoom: 0=clear, 1=cloudy, 2=overcast, 3=rain, 4=snow, 5=fog, 6=storm
+# Map WMO weather codes to Ditoo-Plus weather icon codes.
+# WMO codes: https://open-meteo.com/en/docs (weathercode section)
+# Ditoo codes (confirmed via device testing):
+#   0x01=Clear, 0x03=Cloudy, 0x05=Thunderstorm,
+#   0x06=Rain, 0x08=Snow, 0x09=Fog
+DITOO_CLEAR = 0x01
+DITOO_CLOUDY = 0x03
+DITOO_STORM = 0x05
+DITOO_RAIN = 0x06
+DITOO_SNOW = 0x08
+DITOO_FOG = 0x09
+
 WMO_TO_DIVOOM = {
-    0: 0,   # Clear sky -> clear
-    1: 0,   # Mainly clear -> clear
-    2: 1,   # Partly cloudy -> cloudy
-    3: 2,   # Overcast -> overcast
-    45: 5,  # Fog -> fog
-    48: 5,  # Depositing rime fog -> fog
-    51: 3,  # Light drizzle -> rain
-    53: 3,  # Moderate drizzle -> rain
-    55: 3,  # Dense drizzle -> rain
-    61: 3,  # Slight rain -> rain
-    63: 3,  # Moderate rain -> rain
-    65: 3,  # Heavy rain -> rain
-    66: 3,  # Freezing rain light -> rain
-    67: 3,  # Freezing rain heavy -> rain
-    71: 4,  # Slight snow -> snow
-    73: 4,  # Moderate snow -> snow
-    75: 4,  # Heavy snow -> snow
-    77: 4,  # Snow grains -> snow
-    80: 3,  # Slight rain showers -> rain
-    81: 3,  # Moderate rain showers -> rain
-    82: 3,  # Violent rain showers -> rain
-    85: 4,  # Slight snow showers -> snow
-    86: 4,  # Heavy snow showers -> snow
-    95: 6,  # Thunderstorm -> storm
-    96: 6,  # Thunderstorm w/ slight hail -> storm
-    99: 6,  # Thunderstorm w/ heavy hail -> storm
+    0: DITOO_CLEAR,    # Clear sky
+    1: DITOO_CLEAR,    # Mainly clear
+    2: DITOO_CLOUDY,   # Partly cloudy
+    3: DITOO_CLOUDY,   # Overcast
+    45: DITOO_FOG,     # Fog
+    48: DITOO_FOG,     # Depositing rime fog
+    51: DITOO_RAIN,    # Light drizzle
+    53: DITOO_RAIN,    # Moderate drizzle
+    55: DITOO_RAIN,    # Dense drizzle
+    61: DITOO_RAIN,    # Slight rain
+    63: DITOO_RAIN,    # Moderate rain
+    65: DITOO_RAIN,    # Heavy rain
+    66: DITOO_RAIN,    # Freezing rain light
+    67: DITOO_RAIN,    # Freezing rain heavy
+    71: DITOO_SNOW,    # Slight snow
+    73: DITOO_SNOW,    # Moderate snow
+    75: DITOO_SNOW,    # Heavy snow
+    77: DITOO_SNOW,    # Snow grains
+    80: DITOO_RAIN,    # Slight rain showers
+    81: DITOO_RAIN,    # Moderate rain showers
+    82: DITOO_RAIN,    # Violent rain showers
+    85: DITOO_SNOW,    # Slight snow showers
+    86: DITOO_SNOW,    # Heavy snow showers
+    95: DITOO_STORM,   # Thunderstorm
+    96: DITOO_STORM,   # Thunderstorm w/ slight hail
+    99: DITOO_STORM,   # Thunderstorm w/ heavy hail
 }
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
@@ -92,7 +101,7 @@ class WeatherController:
             current = data["current_weather"]
             temperature = int(round(current["temperature"]))
             wmo_code = current["weathercode"]
-            divoom_code = WMO_TO_DIVOOM.get(wmo_code, 1)
+            divoom_code = WMO_TO_DIVOOM.get(wmo_code, DITOO_CLOUDY)
 
             self._last_temp = temperature
             self._last_code = divoom_code
@@ -116,12 +125,11 @@ class WeatherController:
     def _weather_description(code: int) -> str:
         """Human-readable weather description."""
         descriptions = {
-            0: "Clear",
-            1: "Cloudy",
-            2: "Overcast",
-            3: "Rain",
-            4: "Snow",
-            5: "Fog",
-            6: "Storm",
+            DITOO_CLEAR: "Clear",
+            DITOO_CLOUDY: "Cloudy",
+            DITOO_STORM: "Storm",
+            DITOO_RAIN: "Rain",
+            DITOO_SNOW: "Snow",
+            DITOO_FOG: "Fog",
         }
         return descriptions.get(code, "Unknown")
