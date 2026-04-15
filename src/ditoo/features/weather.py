@@ -70,6 +70,10 @@ class WeatherController:
         Returns:
             True if weather was fetched and sent successfully.
         """
+        if not self._config.enabled:
+            logger.info("Weather feature disabled in config")
+            return False
+
         if self._config.latitude == 0.0 and self._config.longitude == 0.0:
             logger.warning("Weather coordinates not configured")
             return False

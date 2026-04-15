@@ -74,7 +74,7 @@ class MainMenu(Vertical):
 
     #menu-list {
         height: auto;
-        max-height: 8;
+        max-height: 10;
         margin-bottom: 1;
     }
 
@@ -88,6 +88,8 @@ class MainMenu(Vertical):
     MENU_ITEMS = [
         ("Connect / Disconnect", "toggle_connection", "C"),
         ("Sync Device", "sync_all", "S"),
+        ("Brightness", "brightness", "B"),
+        ("Clock Faces", "clock_faces", "F"),
         ("Quit", "quit", "Q"),
     ]
 
