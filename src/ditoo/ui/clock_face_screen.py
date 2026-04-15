@@ -16,12 +16,12 @@ from ditoo.bluetooth.protocol import (
 
 
 CLOCK_FACES = [
-    ("Fullscreen", CLOCK_FULLSCREEN, "Full screen digital clock"),
-    ("Rainbow", CLOCK_RAINBOW, "Rainbow colored digital clock"),
-    ("Boxed", CLOCK_BOXED, "Clock in a bordered box"),
-    ("Analog Square", CLOCK_ANALOG_SQUARE, "Square analog clock face"),
-    ("Fullscreen Neg", CLOCK_FULLSCREEN_NEG, "Inverted fullscreen clock"),
-    ("Analog Round", CLOCK_ANALOG_ROUND, "Round analog clock face"),
+    ("Fullscreen", CLOCK_FULLSCREEN, "Digital fullscreen"),
+    ("Rainbow", CLOCK_RAINBOW, "Rainbow digital"),
+    ("Boxed", CLOCK_BOXED, "Bordered box"),
+    ("Analog Square", CLOCK_ANALOG_SQUARE, "Square analog"),
+    ("Fullscreen Neg", CLOCK_FULLSCREEN_NEG, "Inverted digital"),
+    ("Analog Round", CLOCK_ANALOG_ROUND, "Round analog"),
 ]
 
 
@@ -30,7 +30,7 @@ class ClockFaceItem(ListItem):
 
     DEFAULT_CSS = """
     ClockFaceItem {
-        height: 2;
+        height: 1;
         padding: 0 2;
         color: #c4c4c4;
     }
@@ -47,7 +47,7 @@ class ClockFaceItem(ListItem):
         self._description = description
 
     def compose(self) -> ComposeResult:
-        yield Static(f"  {self._name:<20} {self._description}")
+        yield Static(f"  {self._name:<16} {self._description}")
 
 
 class ClockFaceScreen(ModalScreen[tuple[int, str] | None]):
@@ -59,8 +59,8 @@ class ClockFaceScreen(ModalScreen[tuple[int, str] | None]):
     }
 
     #clock-face-box {
-        width: 56;
-        height: 18;
+        width: 48;
+        height: 14;
         border: double #0f3460;
         background: #0a0a1a;
         padding: 1 2;

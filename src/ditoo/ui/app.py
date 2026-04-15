@@ -16,6 +16,7 @@ from ditoo.ui.status_bar import StatusBar
 from ditoo.ui.menu import MainMenu, MenuItem
 from ditoo.ui.controls_screen import BrightnessScreen
 from ditoo.ui.clock_face_screen import ClockFaceScreen
+from ditoo.ui.sync_screen import SyncScreen, SyncResult
 
 logger = get_logger(__name__)
 
@@ -137,29 +138,37 @@ class DitooApp(App):
     async def _sync_worker(self) -> None:
         """Run full sync in background thread."""
         try:
-            results = []
+            from datetime import datetime
+
+            result = SyncResult()
 
             # Sync clock
-            clock_ok = self._clock.sync_time()
-            if clock_ok:
-                from datetime import datetime
-                now = datetime.now().strftime("%H:%M:%S")
-                results.append(f"Clock {now}")
-            else:
-                results.append("Clock FAIL")
+            result.clock_ok = self._clock.sync_time()
+            if result.clock_ok:
+                result.clock_time = datetime.now().strftime("%H:%M:%S")
 
             # Sync weather
             weather_ok, weather_detail = self._weather.fetch_and_push()
+            result.weather_ok = weather_ok
             if weather_ok:
-                results.append(f"Weather {weather_detail}")
+                result.weather_temp = str(self._weather.last_temperature)
+                result.weather_desc = self._weather.last_description
+                result.weather_code = str(self._weather._last_code)
             else:
-                results.append(f"Weather: {weather_detail}")
+                result.weather_error = weather_detail
 
-            summary = "Synced: " + " | ".join(results)
-            self.call_from_thread(self._log, summary)
+            self.call_from_thread(self._show_sync_result, result)
             self.call_from_thread(self._update_status)
         except Exception as e:
             self.call_from_thread(self._log, f"Sync error: {e}")
+
+    def _show_sync_result(self, result: SyncResult) -> None:
+        """Display sync results modal."""
+        self.push_screen(SyncScreen(result))
+        if result.clock_ok and result.weather_ok:
+            self._log("Sync complete.")
+        else:
+            self._log("Sync completed with errors.")
 
     def action_brightness(self) -> None:
         """Open brightness adjustment modal."""
