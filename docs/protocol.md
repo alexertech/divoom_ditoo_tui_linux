@@ -4,6 +4,20 @@ Reverse-engineered RFCOMM binary protocol for the Divoom Ditoo-Plus pixel art sp
 
 Sources: [hass-divoom](https://github.com/d03n3rfr1tz3/hass-divoom), [node-divoom-timebox-evo](https://github.com/RomRider/node-divoom-timebox-evo), [divoom-ditoo-pro-controller](https://github.com/andreas-mausch/divoom-ditoo-pro-controller), and live device testing.
 
+**Device:** A81-DITTO-PLUS · 16×16 pixel screen · Bluetooth RFCOMM
+
+---
+
+## Ditoo-Specific Behaviors
+
+These differ from other Divoom devices (Timebox, Pixoo) and will break your code if you copy from those projects:
+
+1. **No byte stuffing.** The Ditoo-Plus sends raw bytes between 0x01/0x02 frame markers. Other devices escape 0x01/0x02/0x03 in the payload — applying that escaping to the Ditoo corrupts every command containing those byte values.
+2. **Weather codes are unique.** The Ditoo uses 0x01=Clear, 0x03=Cloudy, 0x05=Storm, 0x06=Rain, 0x08=Snow, 0x09=Fog. Generic Divoom code tables (0=clear, 1=cloudy, etc.) produce wrong icons.
+3. **set_clock format differs from Timebox Evo.** Byte 2 is the 24h flag (not a sub-command), byte 4 is "clock activated" (not show_time). See 0x45 section below.
+4. **set_weather (0x5F) does NOT send an ACK.** Most other commands ACK with `0x55`.
+5. **No battery query over RFCOMM.** Use upower/D-Bus on the host system instead.
+
 ---
 
 ## Frame Format
@@ -89,6 +103,31 @@ Weather codes (confirmed via device testing):
 | 0x08 | Snow |
 | 0x09 | Fog |
 
+### 0x44 — Static Image Upload (16×16) ✅ Confirmed
+
+Pushes a single-frame image to the Custom channel.
+
+```
+Payload: [0x44, 0x00, 0x0A, 0x0A, 0x04, ...animation_frame...]
+```
+
+Animation frame format:
+```
+[0xAA, frame_len_lo, frame_len_hi, duration_lo, duration_hi,
+ reset_palette, num_colors, ...palette_rgb..., ...pixel_data...]
+
+  frame_len:    total frame size in bytes (including this 7-byte header)
+  duration:     16-bit LE, milliseconds (0 for static)
+  reset_palette: 0x00 first frame, 0x01 subsequent
+  num_colors:   palette size (0x00 = 256)
+  palette_rgb:  num_colors × 3 bytes (R, G, B)
+  pixel_data:   bit-packed palette indices, LSB first
+                bits_per_pixel = ceil(log2(num_colors))
+                16×16 = 256 pixels total
+```
+
+Device ACKs with `0x44 0x55` on success.
+
 ### 0x46 — Get Settings
 
 ```
@@ -96,6 +135,35 @@ Payload: [0x46]
 Response: [0x04, 0x46, 0x55, ...22 bytes...]
   Byte 8: Brightness (0-100)
 ```
+
+---
+
+## Partially Tested Commands
+
+### 0x49 — Animation Upload (chunked)
+
+Sends multi-frame animations in chunks. Each packet:
+
+```
+Payload: [0x49, total_len_lo, total_len_hi, packet_number, ...data_chunk...]
+  total_len:     16-bit LE total animation data size
+  packet_number: increments per chunk, wraps at 0xFF
+  data_chunk:    max ~200 bytes of animation frame data
+```
+
+Animation data is concatenated frames using the same 0xAA format as 0x44.
+
+**What works:**
+- Small animations (2 frames, <1KB) display correctly with 50ms delay
+- `packet_number` must wrap at 0xFF: use `packet_num & 0xFF` (bare `bytes([n])` raises ValueError for n>255)
+- Drain device ACKs every ~10 packets to prevent receive buffer buildup
+
+**What breaks:**
+- `total_len` is 16-bit — files >65KB overflow (587KB file sends 63,923 as length). **Hard blocker for large files.**
+- Sending at full speed causes socket buffer overflow (failed at packet 287 of ~3000)
+- Needs inter-packet delays: 50ms for small files, 80ms+ for large
+- Divoom gallery files can be enormous (tested: 3687 frames, 587KB, 434s of animation) — impractical over RFCOMM
+- Device shows "satellite crash" error animation when upload data is malformed
 
 ---
 
@@ -189,33 +257,6 @@ Payload: [0x45, 0x03, effect_number]
   14=RainbowCross, 15=RainbowShapes
 ```
 
-### Image Upload (16x16)
-
-```
-Payload: [0x44, 0x00, 0x0A, 0x0A, 0x04,
-          0xAA,                         # frame start marker
-          frame_len_lo, frame_len_hi,   # 16-bit LE
-          0x00, 0x00, 0x00,
-          num_colors,                   # palette size (0x00 = 256)
-          ...color_data...,             # RGB triplets (3 bytes * num_colors)
-          ...pixel_data...]             # palette indices, bit-packed LSB first
-
-  bits_per_pixel = ceil(log2(num_colors))
-  16x16 = 256 pixels total
-```
-
-### Animation Upload
-
-```
-Payload: [0x49, total_len_lo, total_len_hi, packet_number, ...frame_data...]
-
-Per frame:
-  [0xAA, frame_len_lo, frame_len_hi, duration_lo, duration_hi,
-   reset_palette, num_colors, ...palette..., ...pixels...]
-
-Max ~200 bytes per packet. Increment packet_number per chunk.
-```
-
 ### Game Control
 
 | Cmd | Description | Payload |
@@ -256,9 +297,34 @@ The device ACKs recognized commands:
 
 ---
 
+## Divoom Cloud API
+
+Gallery content can be fetched from Divoom's servers (requires account).
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `appin.divoom-gz.com/UserLogin` | POST | Login (email + MD5 password) |
+| `app.divoom-gz.com/GetHotFilesV2` | POST | Browse hot gallery files |
+| `app.divoom-gz.com/Discover/GetAlbumList` | POST | List gallery albums (44 categories) |
+| `app.divoom-gz.com/Channel/GetDialType` | POST | List dial/clock types (25 categories) |
+| `f.divoom-gz.com/{FileId}` | GET | Download raw animation data |
+
+Login returns `Token` + `UserId` used for authenticated endpoints. `GetHotFilesV2` returns `FileList` with `FileId` strings (path-like, e.g. `group1/M00/9C/E1/...`). `DeviceType: 5` = Ditoo.
+
+Gallery files use the same 0xAA frame format as the 0x44/0x49 commands. Tested file: 587KB, 3687 frames, 434s total animation, frame sizes 7-1025 bytes, durations 50-500ms. Files are raw concatenated 0xAA frames — no container header.
+
+**Dead ends (tested, don't bother):**
+- `SearchGalleryV2` — accepts requests but always returns empty `FileList` regardless of parameters (`Keyword`, `TagName`, `SearchText`, etc.)
+- `Discover/GetAlbumImageList` — returns `ReturnCode: 1` (Failed) for all parameter combos
+- `Channel/GetDialList` — returns `ReturnCode: 3` for all `DialType`/`Type` values
+- `GetHotFilesV2` ignores filter params — same 3 files returned regardless of `TagName`, `Category`, `AlbumId`
+
+---
+
 ## Known Gaps
 
-- No command found for querying battery level over RFCOMM (use upower/D-Bus instead)
+- No command for querying battery level over RFCOMM (use upower/D-Bus instead)
 - No command for firmware version query
 - EQ/equalizer settings referenced but never reverse-engineered
 - Lyrics display (`0x45, 0x06`) — Ditoo-specific, untested
+- Animation upload (0x49) unreliable for large files (>65KB total_len overflow)

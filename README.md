@@ -14,6 +14,9 @@
 - Brightness control
 - Clock face selection (6 styles)
 - Channel switching (Clock, Lighting, Cloud, VJ, Visualizer, Custom)
+- Icon browser — search 3600+ game icons, preview, and push to device
+- Static image upload (16×16 pixel art via 0x44)
+- Toast notifications for action feedback
 
 ## Usage
 
@@ -32,7 +35,27 @@ ditoo --log-level DEBUG         # Verbose logging
 | `S` | Sync clock + weather |
 | `B` | Brightness |
 | `F` | Clock faces |
+| `I` | Icon browser |
 | `Q` | Quit |
+
+### Icon Browser
+
+Press `I` to search [game-icons.net](https://game-icons.net) (3600+ icons by Lorc, Delapouite, et al). The flow:
+
+1. **Search** — live filtering as you type
+2. **Color** — pick a color preset (green, red, cyan, pink, white, yellow)
+3. **Preview** — ASCII art preview of the 16×16 result
+4. **Push** — sends to device as a static image on the Custom channel
+
+Icons are downloaded as white-on-black PNGs (the only pre-rendered combo the site serves) and recolored client-side to the selected palette. The icon index (3659 entries from sitemap) is cached at `/tmp/ditoo_game_icons_index.txt` after first load.
+
+### Standalone Tools
+
+```bash
+python icon_push.py brain       # Search + push icon from CLI
+python search_and_push.py       # Tenor GIF search + push (animated/static)
+python test_animation.py        # Animation upload test (0x49 chunked)
+```
 
 ## Setup
 
@@ -69,29 +92,47 @@ Generate a starter config with `ditoo --generate-config > ~/.config/ditoo/config
 
 ```
 src/ditoo/
-  __main__.py          CLI entry point (argparse)
-  config.py            TOML config with dataclass models
+  __main__.py             CLI entry point (argparse)
+  config.py               TOML config with dataclass models
+  logging_setup.py        Logging configuration
   bluetooth/
-    connection.py      RFCOMM socket manager (thread-safe)
-    protocol.py        Binary protocol encoder
+    connection.py          RFCOMM socket manager (thread-safe)
+    protocol.py            Binary protocol encoder (no byte stuffing)
   features/
-    clock.py           Time sync
-    weather.py         Open-Meteo fetch + push
-    brightness.py      Brightness/volume control
-    battery.py         Battery via upower/D-Bus
+    clock.py               Time sync
+    weather.py             Open-Meteo fetch + push (WMO → Ditoo codes)
+    brightness.py          Brightness/volume control
+    battery.py             Battery via upower/D-Bus
+    icons.py               game-icons.net search, download, Divoom conversion
   ui/
-    app.py             Main Textual app
-    menu.py            DOS-style main menu
-    status_bar.py      Connection/battery status
-    controls_screen.py Brightness/volume modals
-    clock_face_screen.py Clock style picker
-    sync_screen.py     Sync results display
+    app.py                 Main Textual app + action handlers
+    menu.py                DOS-style main menu
+    status_bar.py          Connection/battery status
+    controls_screen.py     Brightness/volume modals
+    clock_face_screen.py   Clock style picker
+    sync_screen.py         Sync results display
+    icon_search_screen.py  Icon search → color → preview → push flow
+    channel_screen.py      Channel switching
 ```
+
+## Dev Notes
+
+**Textual gotchas:**
+- Do NOT name attributes `_display` on `App` subclasses — it shadows Textual's internal `App._display()` method. Use `_display_ctrl` or similar.
+- `call_from_thread()` lives on `App`, not `Screen`. From a ModalScreen worker, use `self.app.call_from_thread()`.
+- Use `self.notify()` for user-visible feedback (toast above footer), not a hidden Static log bar.
+
+**Ditoo protocol gotchas:** See [`docs/protocol.md` § Ditoo-Specific Behaviors](docs/protocol.md#ditoo-specific-behaviors).
 
 ## Docs
 
-- [`docs/protocol.md`](docs/protocol.md) — Ditoo-Plus Bluetooth protocol reference (all known commands)
+- [`docs/protocol.md`](docs/protocol.md) — Ditoo-Plus Bluetooth protocol reference
+
+## Credits
+
+- **Game icons** by [Lorc](https://lorcblog.blogspot.com), [Delapouite](https://delapouite.com), and [contributors](https://game-icons.net/about.html) — licensed under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/)
+- **Protocol** reverse-engineered from [hass-divoom](https://github.com/d03n3rfr1tz3/hass-divoom), [node-divoom-timebox-evo](https://github.com/RomRider/node-divoom-timebox-evo), [divoom-ditoo-pro-controller](https://github.com/andreas-mausch/divoom-ditoo-pro-controller), and live device testing
 
 ## License
 
-Private.
+MIT — see [LICENSE](LICENSE).
