@@ -90,6 +90,7 @@ class MainMenu(Vertical):
         ("Sync Device", "sync_all", "S"),
         ("Brightness", "brightness", "B"),
         ("Clock Faces", "clock_faces", "F"),
+        ("Icon Browser", "icon_browser", "I"),
         ("Quit", "quit", "Q"),
     ]
 

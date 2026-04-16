@@ -17,6 +17,7 @@ from ditoo.ui.menu import MainMenu, MenuItem
 from ditoo.ui.controls_screen import BrightnessScreen
 from ditoo.ui.clock_face_screen import ClockFaceScreen
 from ditoo.ui.sync_screen import SyncScreen, SyncResult
+from ditoo.ui.icon_search_screen import IconSearchScreen, IconSelection
 
 logger = get_logger(__name__)
 
@@ -44,8 +45,8 @@ class DitooApp(App):
     #log-bar {
         dock: bottom;
         height: 1;
-        background: #111122;
-        color: #446688;
+        background: #111133;
+        color: #00d2ff;
         padding: 0 1;
     }
     """
@@ -56,6 +57,7 @@ class DitooApp(App):
         ("s", "sync_all", "Sync"),
         ("b", "brightness", "Brightness"),
         ("f", "clock_faces", "Clock Faces"),
+        ("i", "icon_browser", "Icons"),
     ]
 
     def __init__(self, config: Config):
@@ -70,6 +72,7 @@ class DitooApp(App):
         self._weather = WeatherController(self._connection, config.weather)
         self._status_bar: StatusBar | None = None
         self._log_bar: Static | None = None
+        self._icon_index: list[str] | None = None
 
     def compose(self) -> ComposeResult:
         yield StatusBar(id="status-bar")
@@ -82,10 +85,9 @@ class DitooApp(App):
         self._status_bar = self.query_one("#status-bar", StatusBar)
         self._log_bar = self.query_one("#log-bar", Static)
 
-    def _log(self, message: str) -> None:
-        """Update the bottom log bar with a message."""
-        if self._log_bar is not None:
-            self._log_bar.update(f" {message}")
+    def _log(self, message: str, severity: str = "information") -> None:
+        """Show a toast notification above the footer bar."""
+        self.notify(message, severity=severity, timeout=4)
 
     def _read_battery(self) -> int | None:
         """Read battery level from system."""
@@ -222,6 +224,75 @@ class DitooApp(App):
                 self.call_from_thread(self._log, "Clock face: send failed")
         except Exception as e:
             self.call_from_thread(self._log, f"Clock face error: {e}")
+
+    def action_icon_browser(self) -> None:
+        """Open the icon browser modal."""
+        if not self._connection.connected:
+            self._log("Not connected. Press [C] to connect first.")
+            return
+
+        # Lazy-load the icon index
+        if self._icon_index is None:
+            self._log("Loading icon index...")
+            self.run_worker(self._load_index_and_show, thread=True)
+        else:
+            self._show_icon_screen()
+
+    async def _load_index_and_show(self) -> None:
+        """Load icon index in background, then show the screen."""
+        from ditoo.features.icons import load_or_build_index
+        try:
+            self._icon_index = load_or_build_index()
+            self.call_from_thread(self._log, f"Loaded {len(self._icon_index)} icons")
+            self.call_from_thread(self._show_icon_screen)
+        except Exception as e:
+            self.call_from_thread(self._log, f"Icon index failed: {e}")
+
+    def _show_icon_screen(self) -> None:
+        """Display the icon search modal."""
+        def on_icon_result(result: IconSelection) -> None:
+            if result is not None:
+                author, name, fg, bg = result
+                self.run_worker(
+                    lambda: self._push_icon(author, name, fg, bg),
+                    thread=True,
+                )
+
+        self.push_screen(IconSearchScreen(self._icon_index or []), on_icon_result)
+
+    def _push_icon(self, author: str, name: str, fg: str, bg: str) -> None:
+        """Download, convert, and push icon to device in worker thread."""
+        from ditoo.features.icons import download_icon, image_to_divoom_frame
+
+        try:
+            display = name.replace("-", " ").title()
+            self.call_from_thread(self._log, f"Pushing {display}...")
+
+            img = download_icon(author, name, fg, bg)
+            frame_data = image_to_divoom_frame(img)
+
+            # Switch to custom channel
+            channel_frame = DitooProtocol.set_channel(0x05)
+            self._connection.send(channel_frame)
+
+            import time
+            time.sleep(0.3)
+
+            # Push static image via 0x44
+            payload = bytes([0x44, 0x00, 0x0A, 0x0A, 0x04]) + frame_data
+            image_frame = DitooProtocol._build_frame(payload)
+            success = self._connection.send(image_frame)
+
+            if success:
+                self.call_from_thread(
+                    self._log,
+                    f"Icon pushed: {display} ({len(image_frame)}b)",
+                )
+            else:
+                self.call_from_thread(self._log, "Icon push failed")
+
+        except Exception as e:
+            self.call_from_thread(self._log, f"Icon error: {e}")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """Handle menu item selection via Enter key."""
