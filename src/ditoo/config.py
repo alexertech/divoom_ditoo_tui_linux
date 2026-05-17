@@ -7,6 +7,19 @@ import tomllib
 
 
 @dataclass
+class DivoomConfig:
+    """Divoom cloud credentials for gallery sync."""
+
+    email: str = ""
+    password_md5: str = ""
+
+    @property
+    def is_configured(self) -> bool:
+        """True only when both email and pre-hashed password are present."""
+        return bool(self.email and self.password_md5)
+
+
+@dataclass
 class DeviceConfig:
     """Bluetooth device configuration."""
 
@@ -41,6 +54,7 @@ class Config:
     device: DeviceConfig = field(default_factory=DeviceConfig)
     weather: WeatherConfig = field(default_factory=WeatherConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    divoom: DivoomConfig = field(default_factory=DivoomConfig)
 
     @classmethod
     def from_toml(cls, path: Path) -> "Config":
@@ -57,12 +71,14 @@ class Config:
         device_data = data.get("device", {})
         weather_data = data.get("weather", {})
         logging_data = data.get("logging", {})
+        divoom_data = data.get("divoom", {})
 
         try:
             return cls(
                 device=DeviceConfig(**device_data),
                 weather=WeatherConfig(**weather_data),
                 logging=LoggingConfig(**logging_data),
+                divoom=DivoomConfig(**divoom_data),
             )
         except TypeError as e:
             raise ValueError(f"Invalid configuration in {path}: {e}") from e
@@ -90,6 +106,10 @@ class Config:
         lines.append("[logging]")
         lines.append(f'level = "{self.logging.level}"')
         lines.append(f'format = "{self.logging.format}"')
+        lines.append("")
+        lines.append("# [divoom]")
+        lines.append('# email = "you@example.com"')
+        lines.append('# password_md5 = "abc..."   # MD5 of plaintext; see tools/hash_divoom_password.py')
         return "\n".join(lines)
 
 

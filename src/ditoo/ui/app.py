@@ -18,6 +18,7 @@ from ditoo.ui.controls_screen import BrightnessScreen
 from ditoo.ui.clock_face_screen import ClockFaceScreen
 from ditoo.ui.sync_screen import SyncScreen, SyncResult
 from ditoo.ui.icon_search_screen import IconSearchScreen, IconSelection
+from ditoo.ui.animation_browser_screen import AnimationBrowserScreen
 
 logger = get_logger(__name__)
 
@@ -58,6 +59,8 @@ class DitooApp(App):
         ("b", "brightness", "Brightness"),
         ("f", "clock_faces", "Clock Faces"),
         ("i", "icon_browser", "Icons"),
+        ("a", "animation_browser", "Animations"),
+        ("g", "sync_hot_gallery", "Sync gallery"),
     ]
 
     def __init__(self, config: Config):
@@ -293,6 +296,138 @@ class DitooApp(App):
 
         except Exception as e:
             self.call_from_thread(self._log, f"Icon error: {e}")
+
+    def action_animation_browser(self) -> None:
+        """Open the animation browser modal."""
+        if not self._connection.connected:
+            self._log("Not connected. Press [C] to connect first.")
+            return
+
+        self.push_screen(AnimationBrowserScreen())
+
+    def action_sync_hot_gallery(self) -> None:
+        """Fetch, decode, and push the top Divoom hot-gallery animation."""
+        if not self.config.divoom.is_configured:
+            self.notify(
+                "Divoom credentials not configured — see docs/gallery.md",
+                severity="warning",
+            )
+            return
+
+        if not self._connection.connected:
+            self._log("Not connected. Press [C] to connect first.")
+            return
+
+        self._log("Logging in to Divoom...")
+        self.run_worker(self._gallery_worker, thread=True)
+
+    def _gallery_worker(self) -> None:
+        """Fetch, validate, and upload the hot gallery animation (worker thread)."""
+        import time
+        from ditoo.features.gallery import (
+            GalleryError,
+            GalleryValidationError,
+            sync_hot_gallery,
+        )
+        from ditoo.bluetooth.protocol import DitooProtocol, MAX_ANIMATION_BYTES
+
+        connection = self._connection
+        email = self.config.divoom.email
+        password_md5 = self.config.divoom.password_md5
+
+        try:
+            self.call_from_thread(self._log, "Fetching hot gallery...")
+            data = sync_hot_gallery(email, password_md5)
+            total_len = len(data)
+
+            # Safety: with 200-byte chunks the packet_num field overflows at 256 packets.
+            # The gallery clipper enforces this upstream; this assertion catches future
+            # code paths that bypass it.
+            chunk_size = 200
+            total_packets = (total_len + chunk_size - 1) // chunk_size
+            if total_packets > 256:
+                raise ValueError(
+                    f"Upload would need {total_packets} packets, exceeds 8-bit packet_num "
+                    f"ceiling of 256. Cap data at MAX_ANIMATION_BYTES ({MAX_ANIMATION_BYTES}) bytes."
+                )
+
+            self.call_from_thread(
+                self._log,
+                f"Pushing {total_len // 1024} KB to device...",
+            )
+
+            # Switch to Custom channel
+            channel_frame = DitooProtocol.set_channel(0x05)
+            if not connection.send(channel_frame):
+                raise RuntimeError("Failed to switch to Custom channel")
+            time.sleep(0.3)
+
+            # Drain any pending responses
+            self._gallery_drain(connection)
+
+            # Chunked 0x49 upload (same protocol as AnimationBrowserScreen)
+            delay = 0.08 if total_len > 50_000 else 0.05
+            packet_num = 0
+            offset = 0
+
+            while offset < total_len:
+                chunk = data[offset:offset + chunk_size]
+                payload = bytes([
+                    0x49,
+                    total_len & 0xFF,
+                    (total_len >> 8) & 0xFF,
+                    packet_num & 0xFF,
+                ]) + chunk
+
+                frame = DitooProtocol._build_frame(payload)
+                if not connection.send(frame):
+                    raise RuntimeError(f"Upload failed at packet {packet_num}")
+
+                offset += chunk_size
+                packet_num = (packet_num + 1) & 0xFF
+
+                if packet_num % 10 == 0:
+                    self._gallery_drain(connection)
+
+                time.sleep(delay)
+
+            time.sleep(0.5)
+            self._gallery_drain(connection)
+
+            self.call_from_thread(self._log, "Sync complete")
+
+        except GalleryValidationError as exc:
+            logger.error("Gallery validation failed: %s", exc)
+            self.call_from_thread(
+                self.notify, str(exc), severity="error", timeout=10
+            )
+            self.call_from_thread(self._log, f"Sync failed: {exc}", "error")
+        except GalleryError as exc:
+            logger.error("Gallery sync failed: %s", exc)
+            self.call_from_thread(self._log, f"Sync failed: {exc}", "error")
+        except Exception as exc:
+            logger.error("Gallery sync unexpected error: %s", exc)
+            self.call_from_thread(self._log, f"Sync failed: {exc}", "error")
+
+    @staticmethod
+    def _gallery_drain(connection) -> None:
+        """Drain pending device ACKs (best-effort, non-blocking)."""
+        try:
+            sock = connection._sock
+            if sock is None:
+                return
+            sock.setblocking(False)
+            try:
+                while True:
+                    chunk = sock.recv(256)
+                    if not chunk:
+                        break
+            except Exception:
+                pass
+            finally:
+                sock.setblocking(True)
+        except Exception:
+            pass
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         """Handle menu item selection via Enter key."""

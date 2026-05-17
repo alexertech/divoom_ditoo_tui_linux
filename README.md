@@ -16,6 +16,8 @@
 - Channel switching (Clock, Lighting, Cloud, VJ, Visualizer, Custom)
 - Icon browser — search 3600+ game icons, preview, and push to device
 - Static image upload (16×16 pixel art via 0x44)
+- Animation library — 13 curated GIFs, auto-crop sprite framing, push to device (0x49)
+- Hot gallery sync — one-shot pull of Divoom's trending animation, auto-budgeted to fit the device
 - Toast notifications for action feedback
 
 ## Usage
@@ -36,6 +38,8 @@ ditoo --log-level DEBUG         # Verbose logging
 | `B` | Brightness |
 | `F` | Clock faces |
 | `I` | Icon browser |
+| `A` | Animation browser |
+| `G` | Sync hot gallery |
 | `Q` | Quit |
 
 ### Icon Browser
@@ -104,6 +108,9 @@ src/ditoo/
     brightness.py          Brightness/volume control
     battery.py             Battery via upower/D-Bus
     icons.py               game-icons.net search, download, Divoom conversion
+    animations.py          GIF → 0xAA frame converter (auto-bbox crop, quantize, bit-pack)
+    library.py             Animation catalog loader (catalog.toml → AnimationEntry, load_animation)
+    gallery.py             Divoom hot-gallery sync (cloud fetch, 0xAA decode, decimation, re-encode)
   ui/
     app.py                 Main Textual app + action handlers
     menu.py                DOS-style main menu
@@ -124,9 +131,16 @@ src/ditoo/
 
 **Ditoo protocol gotchas:** See [`docs/protocol.md` § Ditoo-Specific Behaviors](docs/protocol.md#ditoo-specific-behaviors).
 
+**Animation gotchas:**
+- The `reset_palette` byte in 0xAA frame headers must always be `0x00` despite upstream source-docs claiming otherwise. Setting `0x01` triggers the device's "satellite crash" error animation. See `docs/protocol.md` § 0x44.
+- Animation `total_len` is 16-bit — hard 64 KB ceiling for any single upload. The converter raises `ValueError` before submitting over-budget data.
+- Source GIFs with small sprites in large backgrounds (e.g., a 16-px cat centered in a 960² frame) render as tiny dots on the 16×16 device. The auto-crop strategy in `animations.py` uses a union bounding box across all frames to detect the sprite and tighten the crop. See `docs/animations.md`.
+
 ## Docs
 
 - [`docs/protocol.md`](docs/protocol.md) — Ditoo-Plus Bluetooth protocol reference
+- [`docs/animations.md`](docs/animations.md) — Animation library design, conversion pipeline, and authoring guide
+- [`docs/gallery.md`](docs/gallery.md) — Hot gallery sync (Divoom cloud fetch + decimation pipeline)
 
 ## Credits
 

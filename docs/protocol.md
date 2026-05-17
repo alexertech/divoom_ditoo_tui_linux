@@ -118,13 +118,27 @@ Animation frame format:
 
   frame_len:    total frame size in bytes (including this 7-byte header)
   duration:     16-bit LE, milliseconds (0 for static)
-  reset_palette: 0x00 first frame, 0x01 subsequent
+  reset_palette: 0x00 always. Despite source-doc claims that subsequent frames
+                 use 0x01, both icons.py and test_animation.py reference
+                 implementations hardcode 0x00 and the device accepts them.
+                 Setting 0x01 produces the "satellite crash" malformed-data
+                 response — likely the device interprets 0x01 as "palette
+                 omitted; reuse prior" and then mis-parses palette bytes as
+                 pixel data. Confirmed empirically 2026-05-15.
   num_colors:   palette size (0x00 = 256)
   palette_rgb:  num_colors × 3 bytes (R, G, B)
   pixel_data:   bit-packed palette indices, LSB first
                 bits_per_pixel = ceil(log2(num_colors))
                 16×16 = 256 pixels total
 ```
+
+**Byte-5 / byte-6 layout (empirical, 2026-05-16):**
+
+Files downloaded from the Divoom cloud gallery carry `reset_palette = 0x01` at byte 5 on all frames after the first, and `num_colors` at byte 6 — the same header layout documented above. Frame 0 of the tested 587KB file has `byte5 = 0x00` (reset_palette), `byte6 = 0x14` (num_colors = 20): `7 + 3*20 + ceil(5*256/8) = 7 + 60 + 160 = 227` bytes, matching `frame_len` exactly.
+
+Frames 1+ have `byte5 = 0x01` (reset_palette set). The device accepts `0x01` from gallery files but rejects it when our local encoder sends it — likely because gallery frames carry a full palette after `0x01` whereas the device interprets `0x01` from the local path as "palette omitted; reuse prior," causing the mis-parse described in the `reset_palette` note above.
+
+For gallery files, `gallery.py::find_clip_offset` trusts `frame_len` (bytes 1-2 LE) as the sole source of truth for frame boundaries and does not inspect `reset_palette` or `num_colors` at all — sidestepping both the byte-5/byte-6 ambiguity and the `reset_palette` question entirely.
 
 Device ACKs with `0x44 0x55` on success.
 
@@ -153,17 +167,33 @@ Payload: [0x49, total_len_lo, total_len_hi, packet_number, ...data_chunk...]
 
 Animation data is concatenated frames using the same 0xAA format as 0x44.
 
-**What works:**
-- Small animations (2 frames, <1KB) display correctly with 50ms delay
+**What works (confirmed 2026-05-15):**
+- 178-frame animation (21,348 bytes, `knight.gif` after auto-crop + 4 bpp quantize) uploads
+  and plays correctly at 50ms inter-packet delay (~107 packets, ~5.4s upload)
+- 2-frame test animation (~84 bytes) works at 50ms delay
 - `packet_number` must wrap at 0xFF: use `packet_num & 0xFF` (bare `bytes([n])` raises ValueError for n>255)
 - Drain device ACKs every ~10 packets to prevent receive buffer buildup
+- The empirical pacing rule in `test_animation.py` (50ms for ≤50KB, 80ms for >50KB) is sound
+  at the small end; the >50KB threshold is unverified beyond the 21KB ceiling reached in testing
+- **`packet_num` is 8-bit on 16×16 devices.** Verified via hass-divoom source
+  (`index.to_bytes(1, ...)` for `screensize != 32`). Total packets per upload must be ≤256 →
+  at 200-byte chunk size, **effective max animation size is 51,200 bytes**, NOT the 16-bit
+  `total_len` value of 65,535. Exceeding 256 packets causes `packet_num` to wrap (0..255,
+  0..70 etc.) and the device misinterprets the wrap as either a new-animation-start or a
+  "missing packets, wait for more" state — observed as the "loading circle" UI followed by
+  hang and satellite-crash on disconnect. `MAX_ANIMATION_BYTES = 51_000` (with a small margin)
+  is enforced in `protocol.py` and applied by the gallery clipper.
 
 **What breaks:**
 - `total_len` is 16-bit — files >65KB overflow (587KB file sends 63,923 as length). **Hard blocker for large files.**
 - Sending at full speed causes socket buffer overflow (failed at packet 287 of ~3000)
-- Needs inter-packet delays: 50ms for small files, 80ms+ for large
+- Setting `reset_palette = 0x01` on any frame triggers the "satellite crash" error animation
+  (see 0x44 § reset_palette note above) — empirically this byte must always be `0x00`
 - Divoom gallery files can be enormous (tested: 3687 frames, 587KB, 434s of animation) — impractical over RFCOMM
 - Device shows "satellite crash" error animation when upload data is malformed
+- Uploading >256 chunks (>~51 KB at 200-byte chunk size) wraps the 8-bit `packet_num` field
+  and causes the device to enter the "loading circle" state, hang, and show satellite-crash on
+  disconnect. Use `MAX_ANIMATION_BYTES` (51,000 bytes) as the upload ceiling.
 
 ---
 

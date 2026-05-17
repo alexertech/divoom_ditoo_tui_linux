@@ -91,6 +91,8 @@ class MainMenu(Vertical):
         ("Brightness", "brightness", "B"),
         ("Clock Faces", "clock_faces", "F"),
         ("Icon Browser", "icon_browser", "I"),
+        ("Animations", "animation_browser", "A"),
+        ("Sync Gallery", "sync_hot_gallery", "G"),
         ("Quit", "quit", "Q"),
     ]
 

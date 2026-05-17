@@ -18,6 +18,14 @@ from ditoo.logging_setup import get_logger
 
 logger = get_logger(__name__)
 
+# Maximum bytes for a single 0x49 chunked animation upload.
+# The Ditoo's packet_num field is 8-bit (verified empirically and via
+# hass-divoom's `index.to_bytes(1, ...)` for 16x16 devices), so total
+# packets must stay <= 256. At the canonical 200-byte chunk size that
+# gives 256 * 200 = 51,200 bytes hard maximum. We use 51,000 for a
+# small safety margin against off-by-one boundary issues.
+MAX_ANIMATION_BYTES = 51_000
+
 # Frame delimiters
 FRAME_HEADER = 0x01
 FRAME_FOOTER = 0x02
